@@ -20,4 +20,5 @@ canny_edges.png
 fnn.jpg
 photo.py
 train_model/exported model/*
+exported model/*
 .idea
