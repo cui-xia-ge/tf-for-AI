@@ -1,0 +1,2 @@
+# 让 Git 自动检测文本文件，并强制使用 LF 规范化
+*.py text eol=lf

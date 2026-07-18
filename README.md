@@ -109,7 +109,7 @@ weight shapes do not depend on the input spatial resolution.
 python train_model/train.py \
   --architecture teacher \
   --data-dir /home/cgcgs/718/dataset/box/total \
-  --data-dir /home/cgcgs/718/dataset/box/real \
+  --representative-dir /home/cgcgs/718/dataset/box/real \
   --test-dir /home/cgcgs/718/dataset/box/test \
   --head-epochs 5 \
   --epochs 40 \
@@ -178,7 +178,7 @@ python train_model/fine-tune.py \
   --architecture teacher \
   --pretrained artifacts/teacher/best.weights.h5 \
   --data-dir /home/cgcgs/718/dataset/box/total \
-  --data-dir /home/cgcgs/718/dataset/box/real \
+  --representative-dir /home/cgcgs/718/dataset/box/real \
   --output-dir artifacts/teacher_finetuned
 ```
 
@@ -198,14 +198,14 @@ student 的 `--backbone-weights auto` 自动解析为 `none`，不会错误使�
 python train_model/train.py \
   --architecture student \
   --data-dir /home/cgcgs/718/dataset/box/total \
-  --data-dir /home/cgcgs/718/dataset/box/real \
+  --representative-dir /home/cgcgs/718/dataset/box/real \
   --output-dir artifacts/student
 
 python train_model/fine-tune.py \
   --architecture student \
   --pretrained artifacts/student/best.weights.h5 \
   --data-dir /home/cgcgs/718/dataset/box/total \
-  --data-dir /home/cgcgs/718/dataset/box/real \
+  --representative-dir /home/cgcgs/718/dataset/box/real \
   --output-dir artifacts/student_finetuned
 ```
 

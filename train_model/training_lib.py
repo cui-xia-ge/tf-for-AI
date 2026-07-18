@@ -101,8 +101,42 @@ def _make_augmentation(seed: int) -> tf.keras.Sequential:
     )
 
 
+def load_representative_dataset(
+    directory: Path,
+    image_size: tuple[int, int] = DEFAULT_IMAGE_SIZE,
+    batch_size: int = 32,
+    seed: int = 123,
+    prefetch: int = 4,
+) -> tf.data.Dataset:
+    """Load all real captures in shuffled order for INT8 calibration."""
+
+    directory = Path(directory)
+    if not directory.is_dir():
+        raise FileNotFoundError(
+            f"representative dataset directory does not exist: {directory}"
+        )
+    dataset = tf.keras.utils.image_dataset_from_directory(
+        directory=str(directory),
+        seed=seed,
+        shuffle=True,
+        color_mode="rgb",
+        image_size=image_size,
+        interpolation="nearest",
+        batch_size=batch_size,
+        label_mode="int",
+    )
+    class_names = tuple(dataset.class_names)
+    if class_names != EXPECTED_CLASSES:
+        raise ValueError(
+            f"unexpected classes in representative dataset {directory}: "
+            f"{class_names}; expected {EXPECTED_CLASSES}"
+        )
+    return dataset.prefetch(prefetch)
+
+
 def load_labeled_datasets(
     data_dirs: Sequence[Path],
+    representative_dir: Path | None = None,
     image_size: tuple[int, int] = DEFAULT_IMAGE_SIZE,
     batch_size: int = 32,
     seed: int = 123,
@@ -135,7 +169,17 @@ def load_labeled_datasets(
         seed=seed,
         reshuffle_each_iteration=True,
     )
-    representative = train_raw.prefetch(prefetch)
+    representative = (
+        load_representative_dataset(
+            representative_dir,
+            image_size=image_size,
+            batch_size=batch_size,
+            seed=seed,
+            prefetch=prefetch,
+        )
+        if representative_dir is not None
+        else train_raw.prefetch(prefetch)
+    )
 
     if augment:
         augmentation = _make_augmentation(seed)
@@ -671,10 +715,9 @@ def parse_image_size(value: str) -> tuple[int, int]:
     return height, width
 
 
-def default_data_dirs(values: Iterable[str] | None) -> list[Path]:
+def default_data_dirs(
+    values: Iterable[str] | None, defaults: Sequence[Path]
+) -> list[Path]:
     if values:
         return [Path(value).expanduser() for value in values]
-    return [
-        Path("/home/cgcgs/718/dataset/box/total"),
-        Path("/home/cgcgs/718/dataset/box/real"),
-    ]
+    return [Path(value).expanduser() for value in defaults]

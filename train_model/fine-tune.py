@@ -29,6 +29,11 @@ from training_lib import (
 )
 
 
+DEFAULT_TRAIN_DATA_DIRS = (Path("/home/cgcgs/718/dataset/box/total"),)
+DEFAULT_REPRESENTATIVE_DIR = Path("/home/cgcgs/718/dataset/box/real")
+DEFAULT_OUTPUT_DIR = Path("artifacts/finetune")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -42,7 +47,12 @@ def parse_args() -> argparse.Namespace:
         help="Labeled class-directory root; repeat to combine multiple roots.",
     )
     parser.add_argument("--test-dir")
-    parser.add_argument("--output-dir", default="artifacts/finetune")
+    parser.add_argument(
+        "--representative-dir",
+        default=str(DEFAULT_REPRESENTATIVE_DIR),
+        help="Real-capture class-directory root used only for INT8 calibration.",
+    )
+    parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     parser.add_argument(
         "--architecture", choices=("teacher", "student"), default="teacher"
     )
@@ -86,7 +96,8 @@ def main() -> None:
         raise ValueError("--unfreeze-tail-blocks cannot be negative")
 
     image_size = parse_image_size(args.image_size)
-    data_dirs = default_data_dirs(args.data_dir)
+    data_dirs = default_data_dirs(args.data_dir, DEFAULT_TRAIN_DATA_DIRS)
+    representative_dir = Path(args.representative_dir).expanduser()
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     checkpoint = output_dir / "best_finetuned.weights.h5"
@@ -96,6 +107,7 @@ def main() -> None:
 
     datasets = load_labeled_datasets(
         data_dirs=data_dirs,
+        representative_dir=representative_dir,
         image_size=image_size,
         batch_size=args.batch_size,
         seed=args.seed,
@@ -187,6 +199,7 @@ def main() -> None:
             "checkpoint_format": checkpoint_format,
             "mobilenet_alpha": args.mobilenet_alpha,
             "data_dirs": [str(path) for path in data_dirs],
+            "representative_dir": str(representative_dir),
             "test_dir": args.test_dir,
             "image_size": list(image_size),
             "batch_size": args.batch_size,
