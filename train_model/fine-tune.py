@@ -45,7 +45,6 @@ def load_and_preprocess_dataset():
     class_names = train_ds.class_names
     print(f"成功识别到 {len(class_names)} 个类别: {class_names}\n")
 
-    # 手动指定 prefetch 数量，彻底消灭 AUTOTUNE 内存警告
     train_ds = train_ds.cache().shuffle(5000).prefetch(buffer_size=4)
     val_ds = val_ds.cache().prefetch(buffer_size=4)
 
@@ -62,8 +61,6 @@ def build_mcu_cnn(input_shape=(120, 120, 3), num_classes=10):
         tf.keras.Input(shape=input_shape),
         # 🚀 新增：将增强模块作为网络的第一道关卡
         data_augmentation,
-        
-        # Block 1
         tf.keras.layers.Conv2D(32, (3, 3), padding='same', use_bias=False),
         tf.keras.layers.BatchNormalization(),
         tf.keras.layers.ReLU(),
@@ -91,9 +88,7 @@ def build_mcu_cnn(input_shape=(120, 120, 3), num_classes=10):
     return model
 
 def compute_mmd(source_features, target_features):
-    """
-    🚀 升级版动态多核 MMD (Mean Heuristic Multi-Kernel MMD)
-    """
+    """动态多核 MMD"""
     n_s = tf.shape(source_features)[0]
     n_t = tf.shape(target_features)[0]
 
@@ -103,16 +98,12 @@ def compute_mmd(source_features, target_features):
     ry = tf.broadcast_to(tf.expand_dims(tf.linalg.diag_part(xx), 0), tf.shape(xx))
     distance_sq = rx + ry - 2.0 * xx
 
-    # 💡 核心优化：动态计算当前 Batch 特征距离的平均值作为基础带宽
-    # 使用 stop_gradient 确保带宽计算不参与反向传播，只作为常数尺度参考
     bandwidth = tf.stop_gradient(tf.reduce_mean(distance_sq))
-    bandwidth = tf.maximum(bandwidth, 1e-5) # 防止除零
+    bandwidth = tf.maximum(bandwidth, 1e-5) 
 
     kernel_val = tf.zeros_like(distance_sq)
-    # 取带宽的多种倍率，覆盖不同尺度的特征差异
     multipliers = [0.25, 0.5, 1.0, 2.0, 4.0]
     for multiplier in multipliers:
-        # gamma = 1 / (2 * sigma^2) = 1 / (2 * bandwidth * multiplier)
         gamma = 1.0 / (2.0 * bandwidth * multiplier)
         kernel_val += tf.exp(-gamma * distance_sq)
 
@@ -148,7 +139,7 @@ class MMD_DomainAdaptationModel(tf.keras.Model):
             target_features, _ = self.cnn(target_x, training=True)
 
             cls_loss = self.compiled_loss(source_y, source_logits)
-            mmd_loss = compute_mmd(source_features, target_features) # 不再传硬编码的sigmas
+            mmd_loss = compute_mmd(source_features, target_features) 
             total_loss = cls_loss + (self.mmd_weight * mmd_loss)
 
         gradients = tape.gradient(total_loss, self.cnn.trainable_variables)
@@ -174,7 +165,7 @@ class CustomSparseCategoricalFocalLoss(tf.keras.losses.Loss):
     def __init__(self, gamma=2.0, alpha=1.0, from_logits=True, **kwargs):
         super(CustomSparseCategoricalFocalLoss, self).__init__(**kwargs)
         self.gamma = gamma
-        self.alpha = alpha # 🚀 现在可以接受单浮点数 或 list/numpy数组
+        self.alpha = alpha 
         self.from_logits = from_logits
 
     def call(self, y_true, y_pred):
@@ -192,20 +183,15 @@ class CustomSparseCategoricalFocalLoss(tf.keras.losses.Loss):
         pred_prob_flat = tf.reshape(pred_prob, [-1, num_classes])
         p_t = tf.reduce_sum(y_true_one_hot * pred_prob_flat, axis=-1)
 
-        # 🚀 核心修改 3：动态应用 alpha 权重
-        # 如果你传入的是数组（比如针对 10 个类的不同权重）
         if isinstance(self.alpha, (list, np.ndarray)):
             alpha_tensor = tf.convert_to_tensor(self.alpha, dtype=tf.float32)
-            # 通过 gather 把对应真实类别的权重抽取出来
             alpha_factor = tf.gather(alpha_tensor, y_true_int)
         else:
-            alpha_factor = self.alpha # 否则就作为统一的标量缩放
+            alpha_factor = self.alpha 
 
         weight = alpha_factor * tf.math.pow((1.0 - p_t), self.gamma)
-
         ce_loss = tf.reshape(ce_loss, [-1])
         focal_loss = weight * ce_loss
-
         return K.mean(focal_loss, axis=-1)
 
 class F1ScoreCheckpoint(tf.keras.callbacks.Callback):
@@ -254,7 +240,6 @@ def export_to_tflite(model, train_ds):
     converter.optimizations = [tf.lite.Optimize.DEFAULT]
     converter.representative_dataset = representative_data_gen
     converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
-    
     converter.inference_input_type = tf.int8
     converter.inference_output_type = tf.int8
 
@@ -267,51 +252,63 @@ def export_to_tflite(model, train_ds):
     print(f"模型体积大小: {os.path.getsize(TFLITE) / 1024:.2f} KB\n")
 
 if __name__ == "__main__":
+    # --- 1. 数据集准备 ---
     train_source_ds, val_ds, class_names = load_and_preprocess_dataset()
     num_classes = len(class_names)
     
     target_ds = tf.keras.utils.image_dataset_from_directory(
-        REAL,
-        labels=None,
-        color_mode="rgb",
-        image_size=IMG_SIZE,
-        batch_size=BATCH_SIZE
+        REAL, labels=None, color_mode="rgb", image_size=IMG_SIZE, batch_size=BATCH_SIZE
     )
     target_ds = target_ds.repeat().prefetch(buffer_size=4)
-
-    # 用 zip 打包，必须加 prefetch(4) 防止底层内存越界警告
     da_train_dataset = tf.data.Dataset.zip((train_source_ds, target_ds)).prefetch(buffer_size=4)
 
+    # --- 2. 构建模型 ---
     base_cnn = build_mcu_cnn(num_classes=num_classes)
-    da_model = MMD_DomainAdaptationModel(base_cnn, mmd_weight=0.1) 
+    
+    # 🚀 应对“类别不平衡的域偏移”：大幅降低 MMD 权重 (如 0.05)，防止特征被强行扭曲
+    da_model = MMD_DomainAdaptationModel(base_cnn, mmd_weight=0.05) 
 
+    # --- 3. 🚀 加载预训练权重 (Fine-tune 核心逻辑) ---
+    print("\n================== 权重加载 ==================")
+    # 必须先执行 build 或过一遍 dummy 数据，Keras 才会把底层的网络参数对象建立起来
+    da_model.build(input_shape=(None, 120, 120, 3))
+    
+    # 检查你之前保存的模型文件是否存在
+    if os.path.exists(BEST_MODEL):
+        print(f"找到预训练权重文件: {BEST_MODEL}")
+        da_model.load_weights(BEST_MODEL)
+        print("权重加载成功！进入微调(Fine-tune)模式。")
+    else:
+        print(f"未找到预训练权重 {BEST_MODEL}，将从头开始(Scratch)训练。")
+    print("==============================================\n")
+    
     base_cnn.summary() 
 
-    epochs = 120
+    # --- 4. 配置微调超参数 ---
+    epochs = 40  # 微调不需要太多 Epoch
     steps_per_epoch = len(train_source_ds)
     total_decay_steps = steps_per_epoch * epochs
 
     lr_schedule = tf.keras.optimizers.schedules.CosineDecay(
-        initial_learning_rate=0.001,
+        initial_learning_rate=1e-4,  # 🚀 微调专属：初始学习率暴降 10 倍 (0.0001)，保护既有特征
         decay_steps=total_decay_steps,
         alpha=0.01  
     )
     
-    # 🚀 优化：使用 AdamW 替代 Adam。加入 weight_decay 刹车，严控未归一化数据的权重爆炸！
     optimizer = tf.keras.optimizers.AdamW(learning_rate=lr_schedule, weight_decay=1e-4)
 
     callbacks = [
         F1ScoreCheckpoint(val_dataset=val_ds, filepath=BEST_MODEL),
         tf.keras.callbacks.EarlyStopping(monitor='val_macro_f1', 
-        mode='max', patience=25, restore_best_weights=True),
+        mode='max', patience=20, restore_best_weights=True), # 微调的容忍度也可稍微缩短
     ]
     
     da_model.compile(
         optimizer=optimizer,
-        # 🚀 优化：因为你没传具体数组做平衡，所以 alpha 改回 1.0 (等效于不使用 alpha)，只靠 gamma=2.0 自动挖掘难样本
         loss=CustomSparseCategoricalFocalLoss(gamma=2.0, alpha=1.0, from_logits=True)
     )
 
+    # --- 5. 开始训练与导出 ---
     da_model.fit(
         da_train_dataset,
         validation_data=val_ds,

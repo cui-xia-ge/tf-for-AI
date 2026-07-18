@@ -15,10 +15,10 @@ gpus = tf.config.list_physical_devices('GPU')
 
 print("====================================")
 if gpus:
-    print(f"🎉 恭喜！TensorFlow 成功检测到 GPU！")
+    print(f"TensorFlow 成功检测到 GPU！")
     print(f"检测到的 GPU 数量: {len(gpus)}")
     for i, gpu in enumerate(gpus):
         print(f" -> GPU {i}: {gpu}")
 else:
-    print("❌ 遗憾，未检测到可用的 GPU。目前正在使用 CPU 计算。")
+    print("未检测到可用的 GPU。目前正在使用 CPU 计算。")
 print("====================================")
