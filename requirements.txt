@@ -1,8 +1,0 @@
-# Ubuntu training and model-conversion environment.
-# Recommended interpreter: CPython 3.10 or 3.11 (x86_64).
-# The Windows-only augmentation environment is listed separately in
-# requirements-windows-augmentation.txt.
-tensorflow==2.16.1
-numpy==1.26.4
-scikit-learn==1.5.2
-tflite==2.10.0
