@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import random
+import re
+import sys
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -16,6 +20,10 @@ from sklearn.metrics import accuracy_score, confusion_matrix, f1_score
 
 EXPECTED_CLASSES = tuple(f"{index:02d}" for index in range(10))
 DEFAULT_IMAGE_SIZE = (120, 120)
+_RESOURCE_TENSOR_SPEC = re.compile(
+    r"^\s*\d+:\s*TensorSpec\(shape=\(\),\s*"
+    r"dtype=tf\.resource,\s*name=None\)\s*$"
+)
 
 
 @dataclass
@@ -24,6 +32,21 @@ class DatasetBundle:
     representative: tf.data.Dataset
     validation: tf.data.Dataset
     class_names: tuple[str, ...]
+
+
+@contextmanager
+def _hide_resource_tensor_specs():
+    """Filter TensorFlow converter's internal resource-handle dump."""
+
+    captured = ((sys.stdout, io.StringIO()), (sys.stderr, io.StringIO()))
+    try:
+        with redirect_stdout(captured[0][1]), redirect_stderr(captured[1][1]):
+            yield
+    finally:
+        for original, buffer in captured:
+            for line in buffer.getvalue().splitlines(keepends=True):
+                if not _RESOURCE_TENSOR_SPEC.fullmatch(line.rstrip()):
+                    original.write(line)
 
 
 def set_reproducibility(seed: int, deterministic: bool = False) -> None:
@@ -636,13 +659,14 @@ def export_int8_model(
                 if emitted >= representative_samples:
                     return
 
-    converter = tf.lite.TFLiteConverter.from_keras_model(probability_model)
-    converter.optimizations = [tf.lite.Optimize.DEFAULT]
-    converter.representative_dataset = representative_data
-    converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
-    converter.inference_input_type = tf.int8
-    converter.inference_output_type = tf.int8
-    model_bytes = converter.convert()
+    with _hide_resource_tensor_specs():
+        converter = tf.lite.TFLiteConverter.from_keras_model(probability_model)
+        converter.optimizations = [tf.lite.Optimize.DEFAULT]
+        converter.representative_dataset = representative_data
+        converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
+        converter.inference_input_type = tf.int8
+        converter.inference_output_type = tf.int8
+        model_bytes = converter.convert()
     output_path.write_bytes(model_bytes)
 
     interpreter = tf.lite.Interpreter(model_content=model_bytes)
