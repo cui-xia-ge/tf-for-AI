@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import os
 import random
 import re
@@ -32,6 +33,8 @@ class DatasetBundle:
     representative: tf.data.Dataset
     validation: tf.data.Dataset
     class_names: tuple[str, ...]
+    train_counts: tuple[int, ...]
+    validation_counts: tuple[int, ...]
 
 
 @contextmanager
@@ -67,35 +70,109 @@ def configure_gpu_memory_growth() -> None:
             pass
 
 
+_IMAGE_EXTENSIONS = frozenset({".bmp", ".gif", ".jpeg", ".jpg", ".png"})
+
+
+def _stratified_file_split(
+    directory: Path,
+    validation_fraction: float,
+    seed: int,
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    if not directory.is_dir():
+        raise FileNotFoundError(f"dataset directory does not exist: {directory}")
+    if not 0.0 < validation_fraction < 1.0:
+        raise ValueError("validation fraction must be between 0 and 1")
+
+    train_paths: dict[str, list[str]] = {}
+    validation_paths: dict[str, list[str]] = {}
+    for class_index, class_name in enumerate(EXPECTED_CLASSES):
+        class_dir = directory / class_name
+        if not class_dir.is_dir():
+            raise ValueError(f"missing class directory {class_dir}")
+        paths = sorted(
+            str(path)
+            for path in class_dir.iterdir()
+            if path.is_file() and path.suffix.lower() in _IMAGE_EXTENSIONS
+        )
+        if not paths:
+            raise ValueError(f"class directory is empty: {class_dir}")
+        # Shuffle within each class before slicing so validation remains
+        # stratified instead of inheriting the global class-directory order.
+        random.Random(seed + class_index).shuffle(paths)
+        validation_count = (
+            min(len(paths) - 1, max(1, int(math.ceil(len(paths) * validation_fraction))))
+            if len(paths) > 1
+            else 0
+        )
+        validation_paths[class_name] = paths[:validation_count]
+        train_paths[class_name] = paths[validation_count:]
+    return train_paths, validation_paths
+
+
+def _paths_dataset(
+    paths_by_class: dict[str, list[str]],
+    image_size: tuple[int, int],
+    batch_size: int,
+    shuffle: bool,
+    seed: int,
+) -> tf.data.Dataset:
+    paths: list[str] = []
+    labels: list[int] = []
+    for class_index, class_name in enumerate(EXPECTED_CLASSES):
+        class_paths = paths_by_class[class_name]
+        paths.extend(class_paths)
+        labels.extend([class_index] * len(class_paths))
+    if not paths:
+        raise ValueError("dataset split is empty")
+
+    dataset = tf.data.Dataset.from_tensor_slices((paths, labels))
+
+    def decode_and_resize(path, label):
+        image = tf.io.read_file(path)
+        image = tf.image.decode_image(image, channels=3, expand_animations=False)
+        image.set_shape([None, None, 3])
+        image = tf.image.resize(image, image_size, method="nearest")
+        return image, label
+
+    dataset = dataset.map(decode_and_resize, num_parallel_calls=tf.data.AUTOTUNE)
+    if shuffle:
+        dataset = dataset.shuffle(
+            buffer_size=max(len(paths), batch_size * 4),
+            seed=seed,
+            reshuffle_each_iteration=True,
+        )
+    return dataset.batch(batch_size)
+
+
 def _directory_dataset(
     directory: Path,
     subset: str,
     image_size: tuple[int, int],
     batch_size: int,
     seed: int,
-) -> tuple[tf.data.Dataset, tuple[str, ...]]:
-    if not directory.is_dir():
-        raise FileNotFoundError(f"dataset directory does not exist: {directory}")
-
-    dataset = tf.keras.utils.image_dataset_from_directory(
-        directory=str(directory),
-        validation_split=0.2,
-        subset=subset,
-        seed=seed,
-        shuffle=subset == "training",
-        color_mode="rgb",
-        image_size=image_size,
-        interpolation="nearest",
-        batch_size=batch_size,
-        label_mode="int",
+    validation_fraction: float = 0.20,
+) -> tuple[tf.data.Dataset, tuple[str, ...], tuple[int, ...]]:
+    train_paths, validation_paths = _stratified_file_split(
+        directory, validation_fraction=validation_fraction, seed=seed
     )
-    class_names = tuple(dataset.class_names)
-    if class_names != EXPECTED_CLASSES:
-        raise ValueError(
-            f"unexpected classes in {directory}: {class_names}; "
-            f"expected {EXPECTED_CLASSES}"
-        )
-    return dataset, class_names
+    if subset == "training":
+        paths_by_class = train_paths
+        shuffle = True
+    elif subset == "validation":
+        paths_by_class = validation_paths
+        shuffle = False
+    else:
+        raise ValueError(f"unknown dataset subset: {subset}")
+
+    dataset = _paths_dataset(
+        paths_by_class,
+        image_size=image_size,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        seed=seed,
+    )
+    counts = tuple(len(paths_by_class[name]) for name in EXPECTED_CLASSES)
+    return dataset, EXPECTED_CLASSES, counts
 
 
 def _concatenate(datasets: Sequence[tf.data.Dataset]) -> tf.data.Dataset:
@@ -164,23 +241,40 @@ def load_labeled_datasets(
     batch_size: int = 32,
     seed: int = 123,
     augment: bool = True,
+    validation_fraction: float = 0.20,
     prefetch: int = 4,
 ) -> DatasetBundle:
-    """Load every directory as labeled data and combine matching splits."""
+    """Load every directory with a reproducible, per-class random split."""
 
     train_parts: list[tf.data.Dataset] = []
     validation_parts: list[tf.data.Dataset] = []
+    train_counts: list[int] = [0] * len(EXPECTED_CLASSES)
+    validation_counts: list[int] = [0] * len(EXPECTED_CLASSES)
     for data_dir in data_dirs:
-        train_part, class_names = _directory_dataset(
-            Path(data_dir), "training", image_size, batch_size, seed
+        train_part, class_names, train_count = _directory_dataset(
+            Path(data_dir),
+            "training",
+            image_size,
+            batch_size,
+            seed,
+            validation_fraction,
         )
-        validation_part, validation_names = _directory_dataset(
-            Path(data_dir), "validation", image_size, batch_size, seed
+        validation_part, validation_names, validation_count = _directory_dataset(
+            Path(data_dir),
+            "validation",
+            image_size,
+            batch_size,
+            seed,
+            validation_fraction,
         )
         if validation_names != class_names:
             raise ValueError(f"class order changed between splits in {data_dir}")
         train_parts.append(train_part)
         validation_parts.append(validation_part)
+        train_counts = [left + right for left, right in zip(train_counts, train_count)]
+        validation_counts = [
+            left + right for left, right in zip(validation_counts, validation_count)
+        ]
 
     train_raw = _concatenate(train_parts)
     validation = _concatenate(validation_parts)
@@ -221,6 +315,8 @@ def load_labeled_datasets(
         representative=representative,
         validation=validation.prefetch(prefetch),
         class_names=EXPECTED_CLASSES,
+        train_counts=tuple(train_counts),
+        validation_counts=tuple(validation_counts),
     )
 
 

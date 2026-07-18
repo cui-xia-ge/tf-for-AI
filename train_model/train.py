@@ -28,8 +28,7 @@ from training_lib import (
 
 DEFAULT_TRAIN_DATA_DIRS = (Path("/home/cgcgs/718/dataset/box/total"),)
 DEFAULT_REPRESENTATIVE_DIR = Path("/home/cgcgs/718/dataset/box/real")
-DEFAULT_OUTPUT_DIR = Path("artifacts/train")
-
+DEFAULT_OUTPUT_DIR = Path("artifacts/teacher_stratified")
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -62,6 +61,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mobilenet-alpha", type=float, default=1.0)
     parser.add_argument("--image-size", default="120x120")
     parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument(
+        "--validation-fraction",
+        type=float,
+        default=0.20,
+        help="Per-class fraction of each labeled directory reserved for validation.",
+    )
     parser.add_argument("--epochs", type=int, default=120)
     parser.add_argument("--head-epochs", type=int, default=5)
     parser.add_argument("--unfreeze-tail-blocks", type=int, default=4)
@@ -126,6 +131,7 @@ def main() -> None:
         batch_size=args.batch_size,
         seed=args.seed,
         augment=not args.no_augment,
+        validation_fraction=args.validation_fraction,
     )
     evaluation = (
         load_test_dataset(
@@ -229,6 +235,9 @@ def main() -> None:
             "test_dir": args.test_dir,
             "image_size": list(image_size),
             "batch_size": args.batch_size,
+            "validation_fraction": args.validation_fraction,
+            "train_counts": list(datasets.train_counts),
+            "validation_counts": list(datasets.validation_counts),
             "epochs_requested": args.epochs,
             "head_epochs": args.head_epochs,
             "unfreeze_tail_blocks": args.unfreeze_tail_blocks,

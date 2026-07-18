@@ -25,6 +25,18 @@ be named `00` through `09`.
 MMD, unlabeled target batches, and focal loss have been removed. Every
 `--data-dir` is treated as labeled supervised data.
 
+训练时每个 `--data-dir` 会在每个类别目录内按 `--seed` 随机抽取
+`--validation-fraction`（默认 0.20）作为验证集，剩余图片用于训练。这样可以避免
+按目录全局排序切分时验证集只包含最后几个类别的问题；划分数量会写入输出的
+`report.json`。
+
+Each labeled directory is split independently and stratified by class. The default
+`--validation-fraction 0.20` is reproducible with `--seed`, and the per-class counts
+are recorded in `report.json`.
+
+随机文件划分适合当前训练迭代；如果多个合成样本来自同一前景或背景，最终效果仍应
+使用未参与合成的独立实拍测试集确认，以避免相关样本造成评估偏乐观。
+
 ## 环境安装 / Environment
 
 建议使用 Python 3.10 或 3.11：
@@ -124,6 +136,17 @@ python train_model/train.py \
   --learning-rate 1e-3 \
   --finetune-learning-rate 1e-5 \
   --output-dir artifacts/teacher
+```
+
+首次重训建议显式固定划分参数，例如：
+
+```bash
+python train_model/train.py \
+  --architecture teacher \
+  --data-dir /home/cgcgs/718/dataset/box/total \
+  --validation-fraction 0.2 \
+  --seed 123 \
+  --output-dir artifacts/teacher_stratified
 ```
 
 采用预训练权重时，程序自动执行两阶段迁移学习：
