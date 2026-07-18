@@ -1,6 +1,7 @@
-tensorflow>=2.16
-numpy
-pandas
-matplotlib
-scikit-learn
-tqdm
+tensorflow==2.16.1
+numpy==1.26.4
+scikit-learn==1.5.2
+tflite==2.10.0
+albumentations==1.3.1
+opencv-python-headless==4.8.1.78
+Pillow==10.1.0

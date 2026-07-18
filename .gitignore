@@ -22,3 +22,4 @@ photo.py
 train_model/exported model/*
 exported model/*
 .idea
+artifacts/
