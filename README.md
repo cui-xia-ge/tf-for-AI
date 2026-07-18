@@ -30,12 +30,19 @@ MMD, unlabeled target batches, and focal loss have been removed. Every
 建议使用 Python 3.10 或 3.11：
 
 ```bash
-python3 -m venv .venv
+uv venv .venv --python 3.11
 source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+uv pip install -r requirements.txt
 python train_model/test.py
 ```
+
+如果机器还没有 Python 3.11，先运行 `uv python install 3.11`。`uv` 会创建并管理
+项目内的 `.venv`，不需要系统 `pip`。若使用 Python 3.10，只需将上面的版本号改为
+`3.10`。
+
+If Python 3.11 is not installed yet, run `uv python install 3.11` first. `uv` manages
+the project-local `.venv`, so a system `pip` is not required. For Python 3.10, replace
+the version in the command with `3.10`.
 
 The dependency versions are pinned because TensorFlow/Keras checkpoint and
 TFLite conversion behavior can change between releases.
