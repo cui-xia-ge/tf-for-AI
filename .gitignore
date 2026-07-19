@@ -1,7 +1,5 @@
-train_model/exported model/*
 exported model/*
 .idea
-artifacts/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

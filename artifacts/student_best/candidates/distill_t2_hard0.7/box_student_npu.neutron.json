@@ -1,0 +1,37 @@
+{
+  "model": "/home/cgcgs/tf-for-AI/artifacts/student_best/candidates/distill_t2_hard0.7/box_student_npu.tflite",
+  "model_size_bytes": 400992,
+  "neutron_scratch_bytes": 86400,
+  "input_runtime_bytes": 43200,
+  "scratch_plus_input_bytes": 129600,
+  "neutron_tensors": {
+    "NeutronScratch": {
+      "shape": [
+        86400
+      ],
+      "runtime_bytes": 86400,
+      "buffer_bytes": 0
+    },
+    "NeutronMicrocode": {
+      "shape": [
+        904
+      ],
+      "runtime_bytes": 904,
+      "buffer_bytes": 904
+    },
+    "NeutronWeights": {
+      "shape": [
+        397616
+      ],
+      "runtime_bytes": 397616,
+      "buffer_bytes": 397616
+    }
+  },
+  "limits": {
+    "max_scratch": 100000,
+    "max_model_bytes": 430000,
+    "target": "mcxn94x"
+  },
+  "passed": true,
+  "failures": []
+}

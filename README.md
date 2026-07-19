@@ -249,8 +249,37 @@ python train_model/convert_neutron.py \
 ```
 
 The default gate rejects more than 100,000 bytes of `NeutronScratch` or a
-converted student larger than 430,000 bytes. The current student baseline uses
-86,400 bytes of scratch.
+converted student larger than 430,000 bytes.
+
+### GPU 蒸馏搜索 / GPU Distillation Search
+
+`train_student.py` 在一个 Python 进程中固定 `split-seed=123` 的分层验证集，
+训练一个监督基线和六组 `temperature={2,4,6}`、`hard_loss_weight={0.5,0.7}`
+的蒸馏候选，再用 seed 456 复训 float macro-F1 最优的初选候选。每个候选都会
+导出完整 INT8、记录混淆矩阵和逐类召回率，并按 INT8 macro-F1 顺序尝试 Neutron
+门禁；通过的最高排名候选会复制到 `artifacts/student_best/`。
+
+`train_student.py` runs the fixed stratified split in one Python process, searches
+one supervised baseline plus six distillation settings, refits the best float
+candidate with seed 456, and ranks all eight models by INT8 macro-F1. It invokes
+the Linux Wine staging path in `convert_neutron.py` and publishes the first
+candidate that passes both Neutron limits:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache uv run python train_model/train_student.py \
+  --teacher artifacts/teacher_stratified/best.weights.h5 \
+  --data-dir /home/cgcgs/718/dataset/box/total \
+  --representative-dir /home/cgcgs/718/dataset/box/real \
+  --converter /media/cgcgs/7CEA04FEEA04B704/Apps/work/eIQ_Toolkit_v1.10.0/bin/neutron-converter/v1.2.0/neutron-converter.exe \
+  --wine-prefix /home/cgcgs/.cache/codex-neutron-wine \
+  --output-dir artifacts/student_best \
+  --split-seed 123
+```
+
+The output contains `best.weights.h5`, `box_student_int8.tflite`,
+`box_student_npu.tflite`, `report.json`, `search_report.json`, and per-candidate
+reports. Use `--initial-candidates 1 --epochs 1 --skip-neutron` for a local CPU
+smoke test; this intentionally does not produce a deployable NPU model.
 
 ## OpenART 部署 / OpenART Deployment
 
