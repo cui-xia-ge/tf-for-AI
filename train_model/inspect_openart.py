@@ -7,10 +7,8 @@ from pathlib import Path
 import tflite
 
 
-# MobileNetV2 converted by the pinned TensorFlow release should reduce to this
-# small builtin set. A new operator is treated as a compatibility change that
-# must be verified on real OpenART firmware before being accepted.
-OPENART_MOBILENET_OPS = {
+# OpenART CNN 路线严格限制在这组 builtin 算子；新增算子必须在真实固件上重新验证。
+OPENART_BUILTIN_OPS = {
     "ADD",
     "CONV_2D",
     "DEPTHWISE_CONV_2D",
@@ -57,7 +55,7 @@ def inspect_model(path: Path) -> dict[str, object]:
             name = tensor.Name().decode("utf-8", errors="replace") if tensor.Name() else str(index)
             float_runtime_tensors.append(name)
 
-    unexpected = sorted(set(unique_operators) - OPENART_MOBILENET_OPS)
+    unexpected = sorted(set(unique_operators) - OPENART_BUILTIN_OPS)
     failures = []
     if custom_operators:
         failures.append(f"custom operators present: {custom_operators}")

@@ -1,4 +1,33 @@
-# MCXVision Teacher/Student 模型训练 / Model Training
+# OpenART 实拍优先模型训练 / OpenART Real-Capture Training
+
+当前主路线是使用 `real/` 实拍图训练 OpenART 可部署的轻量 CNN。MobileNet、知识蒸馏、
+MCX student 和 Neutron 流程仅保留作历史参考，不参与新的模型选择。
+
+## 当前路线：补齐实拍数据并训练 OpenART CNN
+
+每类目标图片数由首次运行时各类 `real + total/shotmix_*` 总数的最小值决定。当前数据
+计算出的目标是每类 222 张。补齐脚本会把选中的 ShotMix 文件以原文件名复制到 `real/`
+并生成可复现的 manifest：
+
+```bash
+uv run python data_process/prepare_real_openart_dataset.py --dry-run
+uv run python data_process/prepare_real_openart_dataset.py
+```
+
+训练时只从原始实拍图留出验证集，所有 `shotmix_` 图片只进入训练；在线增强仅包含轻微的
+亮度、对比度和颜色变化，不包含模糊或噪声。训练会比较 `narrow`、`medium`、`wide` 三个
+OpenART CNN，导出完整 INT8 模型并按实拍验证集 INT8 macro-F1、逐类召回率和模型大小排名：
+
+```bash
+uv run python train_model/train_openart.py \
+  --data-dir /home/cgcgs/718/dataset/box/real \
+  --output-dir artifacts/openart_real
+```
+
+最终模型位于 `artifacts/openart_real/best/box_openart_int8.tflite`。复制到 OpenART 后，
+仍需使用 120x120 RGB、`[0,255]` 输入完成真实加载和推理验证；静态算子检查不能替代实机验证。
+
+旧路线说明如下，仅用于复现实验历史结果。
 
 本子模块用于在 Ubuntu 上训练带标签的十分类箱体模型，并为后续知识蒸馏准备
 teacher 和 student。所有类别目录必须按 `00` 到 `09` 命名。

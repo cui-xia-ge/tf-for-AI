@@ -37,6 +37,19 @@ class DatasetBundle:
     validation_counts: tuple[int, ...]
 
 
+@dataclass
+class OpenArtDatasetBundle:
+    train: tf.data.Dataset
+    representative: tf.data.Dataset
+    validation: tf.data.Dataset
+    class_names: tuple[str, ...]
+    train_counts: tuple[int, ...]
+    validation_counts: tuple[int, ...]
+    train_real_counts: tuple[int, ...]
+    train_shotmix_counts: tuple[int, ...]
+    validation_real_counts: tuple[int, ...]
+
+
 @contextmanager
 def _hide_resource_tensor_specs():
     """Filter TensorFlow converter's internal resource-handle dump."""
@@ -320,6 +333,184 @@ def load_labeled_datasets(
     )
 
 
+def _openart_augmentation(images: tf.Tensor) -> tf.Tensor:
+    """Apply only the mild photometric changes allowed for real captures."""
+
+    images = tf.cast(images, tf.float32)
+    batch_size = tf.shape(images)[0]
+
+    # 这里复刻 ShotMix 前景的轻微亮度/对比度范围；增强只挂在实拍训练流，
+    # 不进入推理图，也不对验证集或代表性校准数据生效。
+    brightness_contrast_mask = tf.random.uniform([batch_size, 1, 1, 1]) < 0.30
+    brightness = tf.random.uniform(
+        [batch_size, 1, 1, 1], minval=-0.08 * 255.0, maxval=0.08 * 255.0
+    )
+    contrast = tf.random.uniform([batch_size, 1, 1, 1], minval=0.92, maxval=1.08)
+    mean = tf.reduce_mean(images, axis=[1, 2], keepdims=True)
+    brightness_contrast = (images - mean) * contrast + mean + brightness
+    images = tf.where(
+        brightness_contrast_mask,
+        tf.clip_by_value(brightness_contrast, 0.0, 255.0),
+        images,
+    )
+
+    # 颜色变化只选择 RGB shift 或 HSV shift 之一，明确不加入模糊和噪声。
+    color_mask = tf.random.uniform([batch_size, 1, 1, 1]) < 0.20
+    use_rgb_shift = tf.random.uniform([batch_size, 1, 1, 1]) < 0.5
+    rgb_shift = images + tf.random.uniform(
+        [batch_size, 1, 1, 3],
+        minval=tf.constant([-3.0, -3.0, -4.0]),
+        maxval=tf.constant([4.0, 3.0, 4.0]),
+    )
+    hsv = tf.image.rgb_to_hsv(tf.clip_by_value(images / 255.0, 0.0, 1.0))
+    hsv_delta = tf.concat(
+        [
+            tf.random.uniform([batch_size, 1, 1, 1], -2.0 / 360.0, 2.0 / 360.0),
+            tf.random.uniform([batch_size, 1, 1, 1], -4.0 / 255.0, 4.0 / 255.0),
+            tf.random.uniform([batch_size, 1, 1, 1], -3.0 / 255.0, 3.0 / 255.0),
+        ],
+        axis=-1,
+    )
+    hsv_shift = tf.image.hsv_to_rgb(tf.clip_by_value(hsv + hsv_delta, 0.0, 1.0))
+    hsv_shift = hsv_shift * 255.0
+    color_shift = tf.where(use_rgb_shift, rgb_shift, hsv_shift)
+    return tf.where(
+        color_mask,
+        tf.clip_by_value(color_shift, 0.0, 255.0),
+        images,
+    )
+
+
+def _openart_source_split(
+    directory: Path,
+    validation_fraction: float,
+    seed: int,
+) -> tuple[dict[str, list[str]], dict[str, list[str]], dict[str, list[str]]]:
+    if not directory.is_dir():
+        raise FileNotFoundError(f"dataset directory does not exist: {directory}")
+    if not 0.0 < validation_fraction < 1.0:
+        raise ValueError("validation fraction must be between 0 and 1")
+
+    train_real: dict[str, list[str]] = {}
+    train_shotmix: dict[str, list[str]] = {}
+    validation_real: dict[str, list[str]] = {}
+    # 仅从原始实拍中留出验证集；所有 shotmix_ 文件必须留在训练集，
+    # 这样验证 macro-F1 才能反映真实摄像头域，而不是合成图域。
+    for class_index, class_name in enumerate(EXPECTED_CLASSES):
+        class_dir = directory / class_name
+        if not class_dir.is_dir():
+            raise ValueError(f"missing class directory {class_dir}")
+        paths = sorted(
+            str(path)
+            for path in class_dir.iterdir()
+            if path.is_file() and path.suffix.lower() in _IMAGE_EXTENSIONS
+        )
+        real_paths = [path for path in paths if not Path(path).name.startswith("shotmix_")]
+        shotmix_paths = [path for path in paths if Path(path).name.startswith("shotmix_")]
+        if len(real_paths) < 2:
+            raise ValueError(
+                f"class {class_name} needs at least two original real images, "
+                f"found {len(real_paths)}"
+            )
+        random.Random(seed + class_index).shuffle(real_paths)
+        validation_count = min(
+            len(real_paths) - 1,
+            max(1, int(math.ceil(len(real_paths) * validation_fraction))),
+        )
+        validation_real[class_name] = real_paths[:validation_count]
+        train_real[class_name] = real_paths[validation_count:]
+        train_shotmix[class_name] = shotmix_paths
+    return train_real, train_shotmix, validation_real
+
+
+def _paths_dataset_from_classes(
+    paths_by_class: dict[str, list[str]],
+    image_size: tuple[int, int],
+    batch_size: int,
+    shuffle: bool,
+    seed: int,
+) -> tf.data.Dataset:
+    dataset = _paths_dataset(
+        paths_by_class,
+        image_size=image_size,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        seed=seed,
+    )
+    return dataset.map(
+        lambda images, labels: (tf.cast(images, tf.float32), labels),
+        num_parallel_calls=tf.data.AUTOTUNE,
+    )
+
+
+def load_openart_datasets(
+    directory: Path,
+    image_size: tuple[int, int] = DEFAULT_IMAGE_SIZE,
+    batch_size: int = 32,
+    seed: int = 123,
+    validation_fraction: float = 0.20,
+    prefetch: int = 4,
+) -> OpenArtDatasetBundle:
+    """Split real captures for validation and train all ShotMix samples."""
+
+    train_real_paths, train_shotmix_paths, validation_paths = _openart_source_split(
+        Path(directory), validation_fraction=validation_fraction, seed=seed
+    )
+    train_real = _paths_dataset_from_classes(
+        train_real_paths, image_size, batch_size, shuffle=True, seed=seed
+    )
+    # 两条训练流分别保留来源：只有原始实拍流使用轻度在线增强。
+    train_real = train_real.map(
+        lambda images, labels: (_openart_augmentation(images), labels),
+        num_parallel_calls=tf.data.AUTOTUNE,
+    )
+    train = train_real
+    if any(train_shotmix_paths[name] for name in EXPECTED_CLASSES):
+        train_shotmix = _paths_dataset_from_classes(
+            train_shotmix_paths, image_size, batch_size, shuffle=True, seed=seed + 1000
+        )
+        train = train.concatenate(train_shotmix)
+    train = train.shuffle(
+        buffer_size=max(
+            16,
+            sum(len(paths) for paths in train_real_paths.values())
+            + sum(len(paths) for paths in train_shotmix_paths.values()),
+        ),
+        seed=seed,
+        reshuffle_each_iteration=True,
+    )
+    validation = _paths_dataset_from_classes(
+        validation_paths, image_size, batch_size, shuffle=False, seed=seed
+    )
+    # 校准只看训练部分的原始实拍，避免把验证图和合成退化带入量化范围。
+    representative = _paths_dataset_from_classes(
+        train_real_paths, image_size, batch_size, shuffle=True, seed=seed + 2000
+    )
+
+    train_real_counts = tuple(len(train_real_paths[name]) for name in EXPECTED_CLASSES)
+    train_shotmix_counts = tuple(
+        len(train_shotmix_paths[name]) for name in EXPECTED_CLASSES
+    )
+    validation_real_counts = tuple(
+        len(validation_paths[name]) for name in EXPECTED_CLASSES
+    )
+    train_counts = tuple(
+        real + shotmix
+        for real, shotmix in zip(train_real_counts, train_shotmix_counts)
+    )
+    return OpenArtDatasetBundle(
+        train=train.prefetch(prefetch),
+        representative=representative.prefetch(prefetch),
+        validation=validation.prefetch(prefetch),
+        class_names=EXPECTED_CLASSES,
+        train_counts=train_counts,
+        validation_counts=validation_real_counts,
+        train_real_counts=train_real_counts,
+        train_shotmix_counts=train_shotmix_counts,
+        validation_real_counts=validation_real_counts,
+    )
+
+
 def load_test_dataset(
     directory: Path,
     image_size: tuple[int, int] = DEFAULT_IMAGE_SIZE,
@@ -357,6 +548,69 @@ def _conv_block(
     )(inputs)
     x = tf.keras.layers.BatchNormalization(name=f"{block_name}_bn")(x)
     return tf.keras.layers.ReLU(name=f"{block_name}_relu")(x)
+
+
+OPENART_CNN_CONFIGS: dict[str, dict[str, object]] = {
+    "narrow": {"channels": (16, 32, 64, 96), "dropout": 0.30},
+    "medium": {"channels": (24, 48, 96, 128), "dropout": 0.25},
+    "wide": {"channels": (32, 64, 128, 160), "dropout": 0.20},
+}
+
+
+def build_openart_classifier(
+    variant: str,
+    input_shape: tuple[int, int, int] = (120, 120, 3),
+    num_classes: int = 10,
+    weight_decay: float = 1e-4,
+) -> tf.keras.Model:
+    """Build a raw-RGB, builtin-op CNN intended for OpenART deployment."""
+
+    if variant not in OPENART_CNN_CONFIGS:
+        raise ValueError(
+            f"unknown OpenART CNN variant {variant!r}; "
+            f"choose from {tuple(OPENART_CNN_CONFIGS)}"
+        )
+    config = OPENART_CNN_CONFIGS[variant]
+    channels = tuple(int(value) for value in config["channels"])
+    dropout = float(config["dropout"])
+    regularizer = tf.keras.regularizers.l2(weight_decay)
+
+    # 保持公共接口为 [0,255] RGB；Rescaling 在量化图内部完成归一化。
+    inputs = tf.keras.Input(shape=input_shape, name="image")
+    x = tf.keras.layers.Rescaling(1.0 / 255.0, name="openart_preprocess")(inputs)
+    # 四个 stride=2 block 将 120x120 降到 8x8，再用一个 stride=1 tail
+    # 提取局部纹理；只使用 OpenART 已验证的 builtin 算子。
+    for index, channel_count in enumerate(channels, start=1):
+        x = tf.keras.layers.Conv2D(
+            channel_count,
+            3,
+            strides=2,
+            padding="same",
+            use_bias=False,
+            kernel_regularizer=regularizer,
+            name=f"openart_block{index}_conv",
+        )(x)
+        x = tf.keras.layers.BatchNormalization(name=f"openart_block{index}_bn")(x)
+        x = tf.keras.layers.ReLU(name=f"openart_block{index}_relu")(x)
+    x = tf.keras.layers.Conv2D(
+        channels[-1],
+        3,
+        padding="same",
+        use_bias=False,
+        kernel_regularizer=regularizer,
+        name="openart_tail_conv",
+    )(x)
+    x = tf.keras.layers.BatchNormalization(name="openart_tail_bn")(x)
+    x = tf.keras.layers.ReLU(name="openart_tail_relu")(x)
+    # GAP 代替大尺寸全连接层，降低参数量和过拟合风险。
+    x = tf.keras.layers.GlobalAveragePooling2D(name="global_average_pool")(x)
+    x = tf.keras.layers.Dropout(dropout, name="classifier_dropout")(x)
+    logits = tf.keras.layers.Dense(
+        num_classes,
+        kernel_regularizer=regularizer,
+        name="classifier",
+    )(x)
+    return tf.keras.Model(inputs, logits, name=f"box_classifier_openart_{variant}")
 
 
 def build_classifier(
