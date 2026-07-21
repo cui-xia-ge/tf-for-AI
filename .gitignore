@@ -1,6 +1,8 @@
 exported model/*
 .idea
-
+.codex
+artifacts/teacher_stratified/
+artifacts/student_best/candidates/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
