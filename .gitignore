@@ -23,4 +23,5 @@ fnn.jpg
 photo.py
 train_model/exported model/*
 exported model/*
+artifacts/
 .idea
