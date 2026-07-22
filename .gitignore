@@ -1,9 +1,13 @@
+train_model/exported model/*
+exported model/*
+artifacts/total_real_mmd/candidates
+.codex
+.agents
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *.so
-.codex
-.agents
 
 # Virtual environments
 venv/
@@ -16,12 +20,4 @@ develop-eggs/
 dist/
 eggs/
 *.egg-info/
-
-222.bmp
-canny_edges.png
-fnn.jpg
-photo.py
-train_model/exported model/*
-exported model/*
-artifacts/
 .idea

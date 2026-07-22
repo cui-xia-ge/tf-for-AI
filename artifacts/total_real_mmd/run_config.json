@@ -1,0 +1,124 @@
+{
+  "data_dir": "/home/cgcgs/718/dataset/box/total",
+  "real_dir": "/home/cgcgs/718/dataset/box/real",
+  "output_dir": "artifacts/total_real_mmd",
+  "seed": 123,
+  "real_train_ratio": 0.55,
+  "real_validation_ratio": 0.15,
+  "real_mmd_ratio": 0.15,
+  "real_test_ratio": 0.15,
+  "batch_size": 32,
+  "epochs": 120,
+  "patience": 25,
+  "top_k": 3,
+  "representative_samples": 500,
+  "mmd_weight": 0.1,
+  "max_total_per_class": 0,
+  "max_real_per_class": 0,
+  "classes": [
+    "00",
+    "01",
+    "02",
+    "03",
+    "04",
+    "05",
+    "06",
+    "07",
+    "08",
+    "09"
+  ],
+  "image_size": [
+    120,
+    120
+  ],
+  "python": "/home/cgcgs/tf-for-AI/.venv/bin/python3",
+  "tensorflow": "2.21.0",
+  "gpus": [
+    "NVIDIA GeForce RTX 5060 Laptop GPU"
+  ],
+  "real_augmentation": {
+    "brightness_contrast_probability": 0.3,
+    "brightness_limit": 0.08,
+    "contrast_limit": 0.08,
+    "color_probability": 0.2,
+    "rgb_shift_limits": [
+      [
+        -3.0,
+        4.0
+      ],
+      [
+        -3.0,
+        3.0
+      ],
+      [
+        -4.0,
+        4.0
+      ]
+    ],
+    "hue_shift_limit": 2.0,
+    "saturation_shift_limit": 4.0,
+    "value_shift_limit": 3.0
+  },
+  "real_counts": {
+    "train": {
+      "00": 41,
+      "01": 58,
+      "02": 50,
+      "03": 56,
+      "04": 51,
+      "05": 69,
+      "06": 37,
+      "07": 54,
+      "08": 40,
+      "09": 49
+    },
+    "validation": {
+      "00": 11,
+      "01": 17,
+      "02": 14,
+      "03": 15,
+      "04": 13,
+      "05": 18,
+      "06": 12,
+      "07": 13,
+      "08": 11,
+      "09": 13
+    },
+    "mmd": {
+      "00": 12,
+      "01": 16,
+      "02": 14,
+      "03": 14,
+      "04": 14,
+      "05": 19,
+      "06": 10,
+      "07": 14,
+      "08": 11,
+      "09": 15
+    },
+    "test": {
+      "00": 11,
+      "01": 17,
+      "02": 13,
+      "03": 15,
+      "04": 13,
+      "05": 18,
+      "06": 12,
+      "07": 12,
+      "08": 11,
+      "09": 12
+    }
+  },
+  "total_counts": {
+    "00": 273,
+    "01": 256,
+    "02": 257,
+    "03": 258,
+    "04": 284,
+    "05": 261,
+    "06": 277,
+    "07": 288,
+    "08": 273,
+    "09": 292
+  }
+}
