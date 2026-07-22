@@ -1,0 +1,57 @@
+进入项目目录，退出旧环境：
+cd ~/tf-for-AI
+deactivate 2>/dev/null || true
+建议直接重建虚拟环境，避免你现在的 pip list 混入系统/ROS 包：
+rm -rf .venv
+uv venv --python 3.11
+source .venv/bin/activate
+如果你没有 Python 3.11，也可以用 3.10、3.12、3.13。TensorFlow 2.21.0 官方支持 Python 3.10-3.13。
+升级基础工具：
+uv pip install --upgrade pip setuptools wheel
+安装当前稳定版 TensorFlow GPU 依赖：
+uv pip install --upgrade "tensorflow[and-cuda]"
+如果你想固定到当前官方稳定版：
+uv pip install "tensorflow[and-cuda]==2.21.0"
+检查安装环境是否干净：
+which python
+which pip
+python -V
+uv pip list | grep -E "tensorflow|nvidia|cuda|cudnn"
+应该能看到类似这些包：
+tensorflow                 2.21.0
+nvidia-cublas-cu12
+nvidia-cuda-runtime-cu12
+nvidia-cudnn-cu12
+nvidia-cufft-cu12
+...
+做 TensorFlow 官方推荐的 GPU 验证：
+uv run python -c "import tensorflow as tf; print(tf.__version__); print(tf.config.list_physical_devices('GPU'))"
+正常应该输出类似：
+2.21.0
+[PhysicalDevice(name='/physical_device:GPU:0', device_type='GPU')]
+如果仍然显示 []，再补动态库链接。这个步骤常用于解决 Cannot dlopen some GPU libraries：
+pushd $(dirname $(python -c 'import tensorflow as tf; print(tf.__file__)'))
+ln -svf ../nvidia/*/lib/*.so* .
+popd
+然后重新验证：
+uv run python -c "import tensorflow as tf; print(tf.config.list_physical_devices('GPU'))"
+如果报 ptxas 相关错误，再补 ptxas 链接：
+ln -sf $(find .venv/lib -path "*/nvidia/cuda_nvcc/*/bin/ptxas" -print -quit) .venv/bin/ptxas
+设置显存按需增长，避免训练一开始占满显存导致异常。可以在你的训练脚本最前面加入：
+import tensorflow as tf
+
+for gpu in tf.config.list_physical_devices("GPU"):
+    tf.config.experimental.set_memory_growth(gpu, True)
+
+print("GPUs:", tf.config.list_physical_devices("GPU"))
+最后运行训练：
+uv run train_model/test.py
+如果还是失败，按报错判断
+Cannot dlopen some GPU libraries：说明 CUDA/cuDNN 动态库仍没找到，重新执行第 7 步。
+Visible GPUs: 0：检查是否在正确虚拟环境里运行：
+uv run python -c "import sys; print(sys.executable)"
+no kernel image is available、unsupported PTX、device kernel image is invalid：这可能是 RTX 5060 较新架构兼容问题。此时最稳的方案是用 NVIDIA 官方 TensorFlow 容器：
+docker run --gpus all -it --rm \
+  -v "$PWD":/workspace -w /workspace \
+  nvcr.io/nvidia/tensorflow:latest \
+  python train_model/test.py
